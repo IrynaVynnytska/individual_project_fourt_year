@@ -1,49 +1,15 @@
-const videoElement = document.getElementsByClassName('input_video')[0];
-const canvasElement = document.getElementsByClassName('output_canvas')[0];
-const canvasCtx = canvasElement.getContext('2d');
+import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/+esm";
 
-function onResults(results) {
-  canvasCtx.save();
-  canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-  canvasCtx.drawImage(
-      results.image, 0, 0, canvasElement.width, canvasElement.height);
-  if (results.multiHandLandmarks) {
-    for (const landmarks of results.multiHandLandmarks) {
-      drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS,
-                     {color: '#00FF00', lineWidth: 5});
-      drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 2});
-    }
-  }
-  canvasCtx.restore();
-}
-
-const hands = new Hands({locateFile: (file) => {
-  return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-}});
-hands.setOptions({
-  maxNumHands: 2,
-  modelComplexity: 1,
-  minDetectionConfidence: 0.5,
-  minTrackingConfidence: 0.5
-});
-hands.onResults(onResults);
-
-const camera = new Camera(videoElement, {
-  onFrame: async () => {
-    await hands.send({image: videoElement});
-  },
-  width: 1280,
-  height: 720
-});
-camera.start();
-
-import { HandLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
+const videoElement = document.getElementById('webcam');
+const canvasElement = document.querySelector('.output_canvas');
+const canvasCtx = canvasElement ? canvasElement.getContext('2d') : null;
 
 let handLandmarker = undefined;
 
+// 1. Initialize MediaPipe Hand Landmarker
 async function createHandLandmarker() {
   const vision = await FilesetResolver.forVisionTasks(
-    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm"
   );
   handLandmarker = await HandLandmarker.createFromOptions(vision, {
     baseOptions: {
@@ -51,32 +17,120 @@ async function createHandLandmarker() {
       delegate: "GPU"
     },
     runningMode: "VIDEO",
-    numHands: 2 // Ideal for bimanual tracking
+    numHands: 2
   });
+  console.log("HandLandmarker initialized successfully.");
+  startWebcam();
+}
+createHandLandmarker();
+
+// 2. Start Webcam Feed
+function startWebcam() {
+  navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } })
+    .then((stream) => {
+      videoElement.srcObject = stream;
+      videoElement.addEventListener("loadeddata", predictWebcam);
+    })
+    .catch((err) => {
+      console.error("Error accessing webcam:", err);
+    });
 }
 
-/* FUNCTIONS FOR SYMMETRIC INPUT */
+// 3. Main Real-Time Prediction & Drawing Loop
+let lastVideoTime = -1;
+async function predictWebcam() {
+  if (!handLandmarker || !canvasCtx) return;
 
-//To detect a custom gesture (e.g., a "Pinch" or an "Open Palm"),
-// write helper functions that check the Euclidean distance or vertical positions of specific landmarks.
+  let startTimeMs = performance.now();
+  if (videoElement.currentTime !== lastVideoTime) {
+    lastVideoTime = videoElement.currentTime;
+    
+    // Run Hand Landmarker detection
+    const results = handLandmarker.detectForVideo(videoElement, startTimeMs);
+
+    // DRAW THE WEBCAM FEED TO THE CANVAS
+    canvasCtx.save();
+    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+
+    // Process detected hands and gestures
+    if (results.landmarks && results.landmarks.length > 0) {
+      for (let i = 0; i < results.landmarks.length; i++) {
+        const landmarks = results.landmarks[i];
+        const handedness = results.handedness[i][0].categoryName; // "Left" or "Right"
+
+        processHandGestures(landmarks, handedness);
+      }
+    }
+    canvasCtx.restore();
+  }
+  
+  window.requestAnimationFrame(predictWebcam);
+}
+
+// 4. Gesture Evaluation Logic
+// Keep track of the last detected gesture for each hand to prevent console spam
+const lastGestures = {
+  Left: null,
+  Right: null
+};
+
+function processHandGestures(landmarks, handedness) {
+  let detectedGesture = "None";
+
+  if (isOpenPalm(landmarks)) {
+    detectedGesture = "Select Object (Open Palm)";
+  } 
+  else if (isPointerAndThumbExtended(landmarks)) {
+    detectedGesture = "Move Object (Pointer & Thumb)";
+  }
+
+  // ONLY log when the gesture changes
+  if (detectedGesture !== lastGestures[handedness]) {
+    if (detectedGesture !== "None") {
+      console.log(`${handedness} Hand detected: ${detectedGesture}`);
+    } else {
+      console.log(`${handedness} Hand: Released / Idle`);
+    }
+    lastGestures[handedness] = detectedGesture;
+  }
+}
+// Helper: 3D Euclidean Distance
 function getDistance(p1, p2) {
-  pass
+  return Math.sqrt(
+    Math.pow(p1.x - p2.x, 2) +
+    Math.pow(p1.y - p2.y, 2) +
+    Math.pow(p1.z - p2.z, 2)
+  );
 }
 
-//Ask Euan about how many ifngers need to check for gestures?
-function isPointerFingerExtended() {
-  pass
+// Helper: Check if finger is extended
+function isFingerExtended(landmarks, tipIndex, pipIndex) {
+  const wrist = landmarks[0];
+  return getDistance(landmarks[tipIndex], wrist) > getDistance(landmarks[pipIndex], wrist);
 }
 
-function isAllFingersExtended() {
-  pass
+// Gesture 1: Open Palm (All fingers extended)
+function isOpenPalm(landmarks) {
+  const thumbExtended = isFingerExtended(landmarks, 4, 2);
+  const indexExtended = isFingerExtended(landmarks, 8, 6);
+  const middleExtended = isFingerExtended(landmarks, 12, 10);
+  const ringExtended = isFingerExtended(landmarks, 16, 14);
+  const pinkyExtended = isFingerExtended(landmarks, 20, 18);
+
+  return thumbExtended && indexExtended && middleExtended && ringExtended && pinkyExtended;
 }
 
-function isSelectObject(landmark) {
-  //all fingers have to be extended (open palm)
-  //should this function 
-  // get a value for a wrist position in space to compare if there is any fatigue or not
-  pass
+// Gesture 2: Pointer & Thumb Extended, others curled
+function isPointerAndThumbExtended(landmarks) {
+  const thumbExtended = isFingerExtended(landmarks, 4, 2);
+  const indexExtended = isFingerExtended(landmarks, 8, 6);
+
+  const middleCurled = !isFingerExtended(landmarks, 12, 10);
+  const ringCurled = !isFingerExtended(landmarks, 16, 14);
+  const pinkyCurled = !isFingerExtended(landmarks, 20, 18);
+
+  return thumbExtended && indexExtended && middleCurled && ringCurled && pinkyCurled;
 }
 
 function isDragObject() {

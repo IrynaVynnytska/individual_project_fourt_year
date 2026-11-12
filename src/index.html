@@ -9,10 +9,10 @@
 </head>
 
 <body>
-  <div class="container">
-    <video class="input_video"></video>
-    <canvas class="output_canvas" width="1280px" height="720px"></canvas>
-  </div>
+<div class="video-container">
+  <video id="webcam" autoplay playsinline style="display:none;"></video>
+  <canvas class="output_canvas" width="1280" height="720"></canvas>
+</div>
 </body>
-<script src="js/tracker.js"></script>
+<script type="module" src="js/tracker.js"></script>
 </html>
